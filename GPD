@@ -1,0 +1,128 @@
+#include <SoftwareSerial.h> // Inclui a biblioteca para comunicação serial em pinos digitais
+#include <TinyGPS++.h>    // Inclui a biblioteca TinyGPS++ para解析 dados NMEA do GPS
+
+// Define os pinos para comunicação serial com o módulo GPS NEO-6M
+SoftwareSerial ss(4, 3); // RX do GPS conectado ao pino 4 do Arduino, TX do GPS conectado ao pino 3 do Arduino
+TinyGPSPlus gps;         // Cria um objeto TinyGPSPlus para processar os dados do GPS
+
+// Define os pinos para os controles de movimento (exemplo com dois motores)
+const int motorEsquerdaFrente = 9;   // Pino para controle de direção do motor esquerdo (frente)
+const int motorEsquerdaTras = 10;    // Pino para controle de direção do motor esquerdo (trás)
+const int motorDireitaFrente = 11;  // Pino para controle de direção do motor direito (frente)
+const int motorDireitaTras = 12;   // Pino para controle de direção do motor direito (trás)
+const int velocidadeMotor = 6;      // Pino para controle de velocidade dos motores (PWM)
+
+// Define o caminho a ser seguido (array de latitudes e longitudes)
+// Cada par representa um ponto de destino
+const double caminho[3][2] = {
+  {-23.550520, -46.633308}, // Exemplo de ponto 1: Avenida Paulista, São Paulo
+  {-23.561350, -46.656184}, // Exemplo de ponto 2: Parque Ibirapuera, São Paulo
+  {-23.548900, -46.638815}  // Exemplo de ponto 3: MASP, São Paulo
+};
+int pontoAtual = 0; // Índice do ponto de destino atual no array 'caminho'
+
+// Define a tolerância para considerar que o robô chegou ao ponto de destino (em metros)
+const float toleranciaChegada = 5.0;
+
+// Função para calcular a distância entre duas coordenadas geográficas (em metros)
+float calcularDistancia(double lat1, double lon1, double lat2, double lon2) {
+  float lat1Rad = radians(lat1);   // Converte latitude 1 para radianos
+  float lon1Rad = radians(lon1);   // Converte longitude 1 para radianos
+  float lat2Rad = radians(lat2);   // Converte latitude 2 para radianos
+  float lon2Rad = radians(lon2);   // Converte longitude 2 para radianos
+
+  float deltaLat = lat2Rad - lat1Rad; // Diferença entre as latitudes
+  float deltaLon = lon2Rad - lon1Rad; // Diferença entre as longitudes
+
+  float a = sin(deltaLat / 2) * sin(deltaLat / 2) + cos(lat1Rad) * cos(lat2Rad) * sin(deltaLon / 2) * sin(deltaLon / 2); // Fórmula de haversine (parte 1)
+  float c = 2 * atan2(sqrt(a), sqrt(1 - a)); // Fórmula de haversine (parte 2)
+
+  float distancia = 6371000.0 * c; // Raio da Terra em metros * c = distância em metros
+  return distancia;                  // Retorna a distância calculada
+}
+
+void moverFrente() {
+  digitalWrite(motorEsquerdaFrente, HIGH);  // Define a direção do motor esquerdo para frente
+  digitalWrite(motorEsquerdaTras, LOW);   // Desativa a direção para trás do motor esquerdo
+  digitalWrite(motorDireitaFrente, HIGH); // Define a direção do motor direito para frente
+  digitalWrite(motorDireitaTras, LOW);  // Desativa a direção para trás do motor direito
+  analogWrite(velocidadeMotor, 150);     // Define a velocidade dos motores (valor entre 0 e 255)
+}
+
+void parar() {
+  digitalWrite(motorEsquerdaFrente, LOW); // Desativa todas as direções do motor esquerdo
+  digitalWrite(motorEsquerdaTras, LOW);
+  digitalWrite(motorDireitaFrente, LOW);  // Desativa todas as direções do motor direito
+  digitalWrite(motorDireitaTras, LOW);
+  analogWrite(velocidadeMotor, 0);       // Define a velocidade dos motores para zero (parado)
+}
+
+void setup() {
+  Serial.begin(9600);   // Inicializa a comunicação serial com o computador
+  ss.begin(9600);     // Inicializa a comunicação serial com o módulo GPS
+  Serial.println("Seguindo o caminho..."); // Mensagem inicial no Serial Monitor
+
+  // Define os pinos dos motores como saída
+  pinMode(motorEsquerdaFrente, OUTPUT);
+  pinMode(motorEsquerdaTras, OUTPUT);
+  pinMode(motorDireitaFrente, OUTPUT);
+  pinMode(motorDireitaTras, OUTPUT);
+  pinMode(velocidadeMotor, OUTPUT);
+}
+
+void loop() {
+  // Enquanto houver dados disponíveis na serial do GPS
+  while (ss.available() > 0) {
+    if (gps.encode(ss.read())) { // Lê e decodifica um byte do GPS
+      if (gps.location.isUpdated()) { // Verifica se as informações de localização foram atualizadas
+        double latitudeAtual = gps.location.lat();   // Obtém a latitude atual
+        double longitudeAtual = gps.location.lng(); // Obtém a longitude atual
+
+        // Obtém o ponto de destino atual do array 'caminho'
+        double latitudeDestino = caminho[pontoAtual][0];
+        double longitudeDestino = caminho[pontoAtual][1];
+
+        // Calcula a distância até o ponto de destino atual
+        float distanciaParaDestino = calcularDistancia(latitudeAtual, longitudeAtual, latitudeDestino, longitudeDestino);
+        Serial.print("Distância para o ponto ");
+        Serial.print(pontoAtual + 1);
+        Serial.print(": ");
+        Serial.print(distanciaParaDestino);
+        Serial.println(" metros");
+
+        // Verifica se o robô chegou ao ponto de destino (dentro da tolerância)
+        if (distanciaParaDestino <= toleranciaChegada) {
+          Serial.print("Chegou ao ponto ");
+          Serial.println(pontoAtual + 1);
+          parar(); // Para o robô ao chegar no ponto
+
+          pontoAtual++; // Move para o próximo ponto no caminho
+
+          // Se todos os pontos foram visitados, para o robô
+          if (pontoAtual >= (sizeof(caminho) / sizeof(caminho[0]))) {
+            Serial.println("Caminho concluído!");
+            while (true) { // Loop infinito para manter o robô parado
+              delay(1000);
+            }
+          } else {
+            Serial.print("Seguindo para o ponto ");
+            Serial.println(pontoAtual + 1);
+            delay(2000); // Espera um pouco antes de seguir para o próximo ponto
+            moverFrente(); // Começa a se mover em direção ao próximo ponto (necessário implementar lógica de direção)
+          }
+        } else {
+          // Se ainda não chegou, continua se movendo (necessário implementar lógica de direção)
+          moverFrente();
+          // *** Lógica de direção mais complexa seria necessária aqui ***
+          // Para um movimento preciso, seria necessário calcular o rumo (bearing)
+          // para o ponto de destino e ajustar a velocidade dos motores para corrigir a direção.
+          // Isso geralmente envolve o uso de uma bússola ou cálculos mais avançados.
+        }
+      } else {
+        // Se a localização não estiver atualizada, pode estar sem sinal de GPS
+        Serial.println("Aguardando sinal de GPS...");
+        parar(); // Para o robô se não houver sinal de GPS confiável
+      }
+    }
+  }
+}
